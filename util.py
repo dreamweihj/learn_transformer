@@ -6,27 +6,63 @@ import torch
 # 注意力计算函数
 def attention(Q, K, V, mask):
     # b句话,每句话50个词,每个词编码成32维向量,4个头,每个头分到8维向量
-    # Q,K,V = [b, 4, 50, 8]
+    # Q,K,V = [b, 4, 50, 8]，# [batch_size, num_heads, seq_len, head_dim]
 
+    # Q: [b, 4, 50, 8]  ← 查询矩阵
+    # K: [b, 4, 50, 8]  ← 键矩阵
     # [b, 4, 50, 8] * [b, 4, 8, 50] -> [b, 4, 50, 50]
     # Q,K矩阵相乘,求每个词相对其他所有词的注意力
     score = torch.matmul(Q, K.permute(0, 1, 3, 2))
+    # permute 函数用于重新排列张量的维度顺序。
+    # 它不会改变张量在内存中的存储方式，而是返回一个新的视图，即新的张量共享相同的数据，但维度顺序不同
+    # K.permute(0, 1, 3, 2),交换最后两个维度
+    # matmul()矩阵乘法
+    # score[i, j, m, n] = 第i个样本，第j个头，第m个词对第n个词的注意力分数
+    # QK ^ T矩阵中：
+    # - 行m：词m对所有词的查询结果（词m作为查询者）
+    # - 列n：所有词对词j的查询结果（词n作为被查询者）
 
-    # 除以每个头维数的平方根,做数值缩放
+    # 注意力公式：softmax(Q·K^T/√d_k)
+    # d_k = head_dim = 8（每个头的维度）
+    # 除以每个头维数的平方根,做数值缩放--->
+    # 防止梯度消失：当d_k较大时，Q·K ^ T点积可能很大
+    # 稳定softmax：softmax对输入值敏感，大值会导致梯度接近0
+    # 保持方差稳定：使softmax输出更平滑
     score /= 8 ** 0.5
 
     # mask遮盖,mask是true的地方都被替换成-inf,这样在计算softmax的时候,-inf会被压缩到0
-    # mask = [b, 1, 50, 50]
-    score = score.masked_fill_(mask, -float('inf'))
+    # mask = [b, 1, 50, 50] =  [batch_size, 1, seq_len, seq_len],1 是广播维度 (broadcasting dimension)
+    # 示例：
+    # A形状: [b, 4, 50, 50]  # attention score
+    # B形状: [b, 1, 50, 50]  # mask
+    # 运算时，B的维度1会自动复制4次，变成[b, 4, 50, 50]
+    # 相当于：每个头使用相同的mask
+    #
+    # 带下划线表示原地操作（in-place）
+    # score.masked_fill_(mask, -inf)  # 原地修改score
+    # score.masked_fill(mask, -inf)  # 返回新tensor，不修改原score
+    # 原地操作节省内存，但会丢失原始数据
+    score = score.masked_fill_(mask, -float('inf')) # 将mask为True的位置替换为负无穷
     score = torch.softmax(score, dim=-1)
+    # 公式：softmax(x_i) = exp(x_i) / Σ_j exp(x_j)
+    # dim=-1 表示最后一个维度
+    # dim=3(dim=-1): 按列做softmax，即每行独立，每行加和为1
+    # 每个词（行）对其他所有词（列）的注意力分布
+
 
     # 以注意力分数乘以V,得到最终的注意力结果
     # [b, 4, 50, 50] * [b, 4, 50, 8] -> [b, 4, 50, 8]
     score = torch.matmul(score, V)
+    #对于每个头，每个词的输出 = Σ(注意力权重 × 对应词的值)
+    # 示例：
+    # 词1的注意力权重: [0.6, 0.3, 0.1, 0.0]  # 对词1-4的注意力
+    # 词1 - 4
+    # 的值向量: [v1, v2, v3, v4]  # 每个是8维向量
+    # 词1的输出 = 0.6 * v1 + 0.3 * v2 + 0.1 * v3 + 0.0 * v4
 
     # 每个头计算的结果合一
     # [b, 4, 50, 8] -> [b, 50, 32]
-    score = score.permute(0, 2, 1, 3).reshape(-1, 50, 32)
+    score = score.permute(0, 2, 1, 3).reshape(-1, 50, 32) # 把4个头的8维输出拼接成32维
 
     return score
 
@@ -42,11 +78,21 @@ class MultiHead(torch.nn.Module):
         self.out_fc = torch.nn.Linear(32, 32)
 
         # 规范化之后,均值是0,标准差是1
-        # BN是取不同样本做归一化
-        # LN是取不同通道做归一化
-        # affine=True,elementwise_affine=True,指定规范化后,再计算一个线性映射
-        # norm = torch.nn.BatchNorm1d(num_features=4, affine=True)
-        # print(norm(torch.arange(32, dtype=torch.float32).reshape(2, 4, 4)))
+        # BN对每个特征维度进行归一化（第二个维度），对每个特征C，跨B和L计算，让每个特征的分布变为：均值=0，标准差=1，用在图像
+        # BatchNorm公式: (x - mean) / sqrt(variance + eps)
+        # LN是对每个样本独立进行归一化（最后一个维度），对每个样本B，跨C和L计算，让每个样本在指定维度上的分布变为：均值=0，标准差=1，用在自然语言处理
+        # 公式：(x - mean_layer) / std_layer
+
+        # 创建BatchNorm1d层
+        # norm = torch.nn.BatchNorm1d(num_features=4, affine=True)#启用可学习的缩放和偏移参数（γ和β）
+        # # affine=True 表示在归一化后，再进行线性变换
+        # # 公式: y = γ * normalized_x + β
+        # 创建测试数据
+        # data = torch.arange(32, dtype=torch.float32).reshape(2, 4, 4)# [batch_size, num_features, sequence_length]
+        # 应用BatchNorm
+        # output = norm(data)
+        # print("BatchNorm输出:")
+        # print(output)
         """
         [[[-1.1761, -1.0523, -0.9285, -0.8047],
          [-1.1761, -1.0523, -0.9285, -0.8047],
@@ -60,6 +106,15 @@ class MultiHead(torch.nn.Module):
 
         # norm = torch.nn.LayerNorm(normalized_shape=4, elementwise_affine=True)
         # print(norm(torch.arange(32, dtype=torch.float32).reshape(2, 4, 4)))
+
+        # normalized_shape可以是一个整数或元组
+        # 1. normalized_shape=4: 对最后一个维度（大小为4）进行归一化
+        # 2. normalized_shape=(4,4): 对最后两个维度（大小都为4）进行归一化
+        # 3. normalized_shape=16: 对最后16个元素进行归一化（不管形状）
+
+        # 本例中：输入形状[2,4,4]，normalized_shape=4
+        # 意味着：对每个样本，在每个第二维的位置上，对最后一维的4个值进行归一化
+
         """
         [[[-1.3416, -0.4472,  0.4472,  1.3416],
          [-1.3416, -0.4472,  0.4472,  1.3416],
