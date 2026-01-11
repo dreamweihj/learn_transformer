@@ -133,7 +133,7 @@ class MultiHead(torch.nn.Module):
     def forward(self, Q, K, V, mask):
         # b句话,每句话50个词,每个词编码成32维向量
         # Q,K,V = [b, 50, 32]
-        b = Q.shape[0]
+        b = Q.shape[0] #获取张量Q第0维的大小，赋值给变量b，即batch_size
 
         # 保留下原始的Q,后面要做短接用
         clone_Q = Q.clone()
@@ -162,9 +162,9 @@ class MultiHead(torch.nn.Module):
 
         # 计算输出,维度不变
         # [b, 50, 32] -> [b, 50, 32]
-        score = self.dropout(self.out_fc(score))
+        score = self.dropout(self.out_fc(score)) #dropout防止过拟合
 
-        # 短接
+        # 短接，残差连接
         score = clone_Q + score
         return score
 
@@ -188,18 +188,18 @@ class PositionEmbedding(torch.nn.Module):
         for i in range(50):
             for j in range(32):
                 pe[i, j] = get_pe(i, j, 32)
-        pe = pe.unsqueeze(0)
+        pe = pe.unsqueeze(0) #在张量的第0维（最前面）增加一个维度。[1,X,X]
 
         # 定义为不更新的常量
         self.register_buffer('pe', pe)
 
-        # 词编码层
-        self.embed = torch.nn.Embedding(39, 32)
+        # 词编码层，每个词用一个32维的向量表示
+        self.embed = torch.nn.Embedding(39, 32) #字典token个数是39
         # 初始化参数
         self.embed.weight.data.normal_(0, 0.1)
 
     def forward(self, x):
-        # [8, 50] -> [8, 50, 32]
+        # [8, 50] -> [8, 50, 32]，8句话，每句话有50个词，每个词编码成32维的向量
         embed = self.embed(x)
 
         # 词编码和位置编码相加

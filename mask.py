@@ -38,12 +38,16 @@ def mask_tril(data):
      [0, 0, 0, 0, 1],
      [0, 0, 0, 0, 0]]"""
     tril = 1 - torch.tril(torch.ones(1, 50, 50, dtype=torch.long))
+    # torch.tril() - 下三角矩阵，上三角部分（对角线以上）变为0
+    # 取反后：下三角是0，上三角是1
 
     # 判断y当中每个词是不是pad,如果是pad则不可见
     # [b, 50]
     mask = data == zidian_y['<PAD>']
 
     # 变形+转型,为了之后的计算
+    # mask可能是float或bool类型，需要转换为long（整数）类型
+    # 因为后续的索引或掩码操作通常需要整数类型
     # [b, 1, 50]
     mask = mask.unsqueeze(1).long()
 

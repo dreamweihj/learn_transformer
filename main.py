@@ -17,7 +17,7 @@ def predict(x):
     # [1, 50]
     # [[0,2,2,2...]]
     target = [zidian_y['<SOS>']] + [zidian_y['<PAD>']] * 49
-    target = torch.LongTensor(target).unsqueeze(0)
+    target = torch.LongTensor(target).unsqueeze(0) # 转换为长整型张量
 
     # x编码,添加位置信息
     # [1, 50] -> [1, 50, 32]
@@ -64,7 +64,7 @@ def predict(x):
 model = Transformer()
 loss_func = torch.nn.CrossEntropyLoss()
 optim = torch.optim.Adam(model.parameters(), lr=2e-3)
-sched = torch.optim.lr_scheduler.StepLR(optim, step_size=3, gamma=0.5)
+sched = torch.optim.lr_scheduler.StepLR(optim, step_size=3, gamma=0.5) #每调用三次折半
 
 for epoch in range(1):
     for i, (x, y) in enumerate(loader):
@@ -73,13 +73,13 @@ for epoch in range(1):
 
         # 在训练时,是拿y的每一个字符输入,预测下一个字符,所以不需要最后一个字
         # [8, 50, 39]
-        pred = model(x, y[:, :-1])
+        pred = model(x, y[:, :-1]) #截掉y最后一个字符
 
         # [8, 50, 39] -> [400, 39]
-        pred = pred.reshape(-1, 39)
+        pred = pred.reshape(-1, 39) #将3维展平成2维，固定第2维为39，第1维取-1表示自动计算
 
-        # [8, 51] -> [400]
-        y = y[:, 1:].reshape(-1)
+        # [8, 50] -> [400]
+        y = y[:, 1:].reshape(-1) #y的第0个字符没有被预测，第0个字符一定是SOS
 
         # 忽略pad
         select = y != zidian_y['<PAD>']
@@ -91,10 +91,10 @@ for epoch in range(1):
         loss.backward()
         optim.step()
 
-        if i % 200 == 0:
+        if i % 200 == 0:  #每200个批次输出一个信息
             # [select, 39] -> [select]
-            pred = pred.argmax(1)
-            correct = (pred == y).sum().item()
+            pred = pred.argmax(1) # argmax(1) 沿着维度1（列方向）取最大值索引
+            correct = (pred == y).sum().item() # .item()转换为Python标量
             accuracy = correct / len(pred)
             lr = optim.param_groups[0]['lr']
             print(epoch, i, lr, loss.item(), accuracy)
